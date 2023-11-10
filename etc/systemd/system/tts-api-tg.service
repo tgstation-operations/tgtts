@@ -1,0 +1,18 @@
+[Unit]
+Description=tts-api-tg
+After=network.target
+
+[Service]
+User=tts
+WorkingDirectory=/home/tts
+Type=notify
+NotifyAccess=main
+WatchdogSec=15s
+TimeoutStartSec=5s
+Nice=-10
+Environment="PYTHONOPTIMIZE=1"
+ExecStart=python3.10 -u /home/tts/.local/bin/waitress-serve --host=localhost --port=5002 --threads=64 --connection-limit=256 --cleanup-interval=1 --channel-timeout=15 tts_api:app
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

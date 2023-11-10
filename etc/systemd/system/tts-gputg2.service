@@ -1,0 +1,23 @@
+[Unit]
+Description=tts-gputg2
+After=network.target
+#PartOf=tts-gpu2.service
+
+
+[Service]
+User=tts
+WorkingDirectory=/home/tts
+Type=notify
+NotifyAccess=main
+WatchdogSec=30s
+TimeoutStartSec=90s
+Nice=-10
+#Environment="PYTORCH_CUDA_ALLOC_CONF=garbage_collection_threshold:0.5,max_split_size_mb:80"
+Environment="PYTHONOPTIMIZE=1"
+Environment="CUDA_MODULE_LOADING=LAZY"
+ExecStart=python3.10 -u /home/tts/.local/bin/waitress-serve --host=localhost --port=5212 --threads=32 --connection-limit=256 --cleanup-interval=1 --channel-timeout=15 tts_onnx:app
+#ExecStart=python3.10 -u -m flask --app tts_onnx run -h 127.0.0.1 -p 5212 --no-reload --no-debugger --without-threads
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
