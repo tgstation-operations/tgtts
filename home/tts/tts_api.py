@@ -8,6 +8,7 @@ import gzip
 import gc
 import re
 from requests_futures.sessions import FuturesSession
+from contextlib import contextmanager
 import subprocess
 #import grequests
 import requests
@@ -106,13 +107,21 @@ def readyup():
 		watchdog.ready()
 		schedule_watchdog()
 
-def hhmmss_to_seconds(string):
-	new_time = 0
-	separated_times = string.split(":")
-	new_time = 60 * 60 * float(separated_times[0])
-	new_time += 60 * float(separated_times[1])
-	new_time += float(separated_times[2])
-	return new_time
+#This is purely so we can force it to kill the process on context leave
+@contextmanager
+def ffmpeg_open(args):
+	try:
+		process = subprocess.Popen(['ffmpeg', *args], stdin = subprocess.PIPE, stdout = subprocess.PIPE, stderr = subprocess.PIPE)
+		yield process
+	finally:
+		process.stdin.close()
+		process.stdout.close()
+		process.stderr.close()
+		process.poll()
+		process.terminate()
+		process.poll()
+		process.kill()
+		process.poll()
 
 def text_to_speech_handler(endpoint, voice, text, filter_complex, pitch, authed, force_regenerate, stats, silicon = False, port=5003):
 	global req_count, cache_hits, cache_misses, last_request_time, avg_request_len, avg_request_rate, avg_request_delay
@@ -195,74 +204,81 @@ def text_to_speech_handler(endpoint, voice, text, filter_complex, pitch, authed,
 	avg_request_delay = mc_avg(avg_request_delay, time.time()-last_request_time)
 	avg_request_rate = mc_avg(avg_request_rate, 1/max(0.0000001, avg_request_delay))
 	stats['downstreamfailures'] += 1
+	
+	#ffmpeg base arguments. quiet, yes to overwrite, format wav input stdin
+	ffmpeg_args = ["-nostats", "-hide_banner", "-loglevel", "warning", "-y", "-f", "wav", "-i", "pipe:0"]
+	
+	if filter_complex != "":
+		filter_complex += ",asplit=2[ogg][mp3]"
+		ffmpeg_args = [*ffmpeg_args, "-filter_complex", filter_complex, "-map", "[ogg]", "-c:a", "libvorbis", "-q:a", "7", "-f", "ogg", f"{path}.ogg", "-map", "[mp3]", "-c:a", "libmp3lame", "-q:a", "1", "-f", "mp3", f"{path}.mp3"]
+	elif silicon:
+		ffmpeg_args = [*ffmpeg_args, "-i", "./SynthImpulse.wav", "-i", "./RoomImpulse.wav", "-filter_complex", "[0] aresample=44100 [re_1]; [re_1] apad=pad_dur=2 [in_1]; [in_1] asplit=2 [in_1_1] [in_1_2]; [in_1_1] [1] afir=dry=10:wet=10 [reverb_1]; [in_1_2] [reverb_1] amix=inputs=2:weights=8 1 [mix_1]; [mix_1] asplit=2 [mix_1_1] [mix_1_2]; [mix_1_1] [2] afir=dry=1:wet=1 [reverb_2]; [mix_1_2] [reverb_2] amix=inputs=2:weights=10 1 [mix_2]; [mix_2] equalizer=f=7710:t=q:w=0.6:g=-6,equalizer=f=33:t=q:w=0.44:g=-10 [out]; [out] alimiter=level_in=1:level_out=1:limit=0.5:attack=5:release=20:level=disabled,asplit=2[ogg][mp3]", "-map", "[ogg]", "-c:a", "libvorbis", "-q:a", "7", "-f", "ogg", f"{path}.ogg", "-map", "[mp3]", "-c:a", "libmp3lame", "-q:a", "1", "-f", "mp3", f"{path}.mp3"]
+	else:
+		ffmpeg_args = [*ffmpeg_args, "-c:a", "libvorbis", "-q:a", "7", "-f", "ogg", f"{path}.ogg", "-c:a", "libmp3lame", "-q:a", "1", "-f", "mp3", f"{path}.mp3"]
+	
 	tts_start = time.time()
 	
 	final_audio = pydub.AudioSegment.empty()
-	with FuturesSession(max_workers=5) as session:
-		response_futures = []
-		for sentence in segmenter.segment(clean_text):
-			if len(''.join(ch for ch in sentence if ch not in string.punctuation)) < 1:
-				continue
+	ffmpeg_metadata_output = ""
+	#open this now so ffmpeg can startup while we send our subrequests.
+	with ffmpeg_open(ffmpeg_args) as ffmpeg_proc:
+		with FuturesSession(max_workers=5) as session:
+			response_futures = []
+			for sentence in segmenter.segment(clean_text):
+				if len(''.join(ch for ch in sentence if ch not in string.punctuation)) < 1:
+					continue
+				steptime = time.time()
+				response_futures.append(session.get(f"http://localhost:{port}/{endpoint}", json={ 'text': sentence, 'voice': voice, 'pitch': pitch }))
+				print(f"subrequest time: {time.time() - steptime}")
+			
+			
+			
+			responses = []
+			#not using as_completed() for order preserving reasons
 			steptime = time.time()
-			response_futures.append(session.get(f"http://localhost:{port}/{endpoint}", json={ 'text': sentence, 'voice': voice, 'pitch': pitch }))
-			print(f"subrequest time: {time.time() - steptime}")
-		
-		responses = []
-		#not using as_completed() for order preserving reasons
-		steptime = time.time()
-		for response_future in response_futures: 
-			responses.append(response_future.result()) 
-		print(f"subresponse time: {time.time() - steptime}")
-		
-		for response in responses:
-			if not response or response == None:
-				print("error1")
-				stats['failures'] -= 1
-				abort(502)
+			for response_future in response_futures: 
+				responses.append(response_future.result()) 
+			print(f"subresponse time: {time.time() - steptime}")
+			
+			for response in responses:
+				if not response or response == None:
+					print("error1")
+					stats['failures'] -= 1
+					abort(502)
+				if response.status_code != 200:
+					print("error2")
+					stats['failures'] -= 1
+					abort(response.status_code)
+				
+				sentence_audio = pydub.AudioSegment.from_file(io.BytesIO(response.content), "wav")
+				
+				sentence_silence = pydub.AudioSegment.silent(random.randint(200, 300), 40000)
+				sentence_audio += sentence_silence
+				final_audio += sentence_audio
+				# ""Goldman-Eisler (1968) determined that typical speakers paused for an average of 250 milliseconds (ms), with a range from 150 to 400 ms.""
+				# (https://scholarsarchive.byu.edu/cgi/viewcontent.cgi?article=10153&context=etd)
+			
+		with io.BytesIO() as data_bytes:
+			final_audio.export(data_bytes, format="wav")
+			
+			stats['avg_tts_request_time'] = mc_avg(stats['avg_tts_request_time'], time.time()-tts_start)
+			avg_request_len = mc_avg(avg_request_len, len(clean_text))
+			
+			last_request_time = time.time()
 			if response.status_code != 200:
-				print("error2")
 				stats['failures'] -= 1
-				abort(response.status_code)
+				abort(500)
+			stats['downstreamfailures'] -= 1
+			os.makedirs(f"{path_prefix}{subpath}", exist_ok=True) 
+			ffmpeg_start = time.time()
+			ffmpeg_stdout, ffmpeg_stderr = ffmpeg_proc.communicate(data_bytes.read(), timeout = 2)
 			
-			sentence_audio = pydub.AudioSegment.from_file(io.BytesIO(response.content), "wav")
-			
-			sentence_silence = pydub.AudioSegment.silent(random.randint(200, 300), 40000)
-			sentence_audio += sentence_silence
-			final_audio += sentence_audio
-			# ""Goldman-Eisler (1968) determined that typical speakers paused for an average of 250 milliseconds (ms), with a range from 150 to 400 ms.""
-			# (https://scholarsarchive.byu.edu/cgi/viewcontent.cgi?article=10153&context=etd)
-		
-	with io.BytesIO() as data_bytes:
-		final_audio.export(data_bytes, format="wav")
-		
-		stats['avg_tts_request_time'] = mc_avg(stats['avg_tts_request_time'], time.time()-tts_start)
-		avg_request_len = mc_avg(avg_request_len, len(clean_text))
-		
-		last_request_time = time.time()
-		if response.status_code != 200:
-			stats['failures'] -= 1
-			abort(500)
-		stats['downstreamfailures'] -= 1
-		os.makedirs(f"{path_prefix}{subpath}", exist_ok=True) 
-		ffmpeg_start = time.time()
-		ffmpeg_result = None
-		if filter_complex != "":
-			filter_complex += ",asplit=2[ogg][mp3]"
-			ffmpeg_result = subprocess.run(["ffmpeg", "-y", "-f", "wav", "-i", "pipe:0", "-filter_complex", filter_complex, "-map", "[ogg]", "-c:a", "libvorbis", "-q:a", "7", "-f", "ogg", f"{path}.ogg", "-map", "[mp3]", "-c:a", "libmp3lame", "-q:a", "1", "-f", "mp3", f"{path}.mp3"], input=data_bytes.read(), capture_output = True)
-		else:
-			if silicon:
-				ffmpeg_result = subprocess.run(["ffmpeg", "-y", "-f", "wav", "-i", "pipe:0", "-i", "./SynthImpulse.wav", "-i", "./RoomImpulse.wav", "-filter_complex", "[0] aresample=44100 [re_1]; [re_1] apad=pad_dur=2 [in_1]; [in_1] asplit=2 [in_1_1] [in_1_2]; [in_1_1] [1] afir=dry=10:wet=10 [reverb_1]; [in_1_2] [reverb_1] amix=inputs=2:weights=8 1 [mix_1]; [mix_1] asplit=2 [mix_1_1] [mix_1_2]; [mix_1_1] [2] afir=dry=1:wet=1 [reverb_2]; [mix_1_2] [reverb_2] amix=inputs=2:weights=10 1 [mix_2]; [mix_2] equalizer=f=7710:t=q:w=0.6:g=-6,equalizer=f=33:t=q:w=0.44:g=-10 [out]; [out] alimiter=level_in=1:level_out=1:limit=0.5:attack=5:release=20:level=disabled,asplit=2[ogg][mp3]", "-map", "[ogg]", "-c:a", "libvorbis", "-q:a", "7", "-f", "ogg", f"{path}.ogg", "-map", "[mp3]", "-c:a", "libmp3lame", "-q:a", "1", "-f", "mp3", f"{path}.mp3"], input=data_bytes.read(), capture_output = True)
-			else:
-				ffmpeg_result = subprocess.run(["ffmpeg", "-y", "-f", "wav", "-i", "pipe:0", "-c:a", "libvorbis", "-q:a", "7", "-f", "ogg", f"{path}.ogg", "-c:a", "libmp3lame", "-q:a", "1", "-f", "mp3", f"{path}.mp3"], input=data_bytes.read(), capture_output = True)
-	stats['avg_ffmpeg_time'] = mc_avg(stats['avg_ffmpeg_time'], time.time()-ffmpeg_start)
-	ffmpeg_metadata_output = ffmpeg_result.stderr.decode()
+			stats['avg_ffmpeg_time'] = mc_avg(stats['avg_ffmpeg_time'], time.time()-ffmpeg_start)
+			ffmpeg_metadata_output = ffmpeg_stderr.decode()
 	
-	print(f"ffmpeg result size: {len(ffmpeg_result.stdout)} stderr = \n{ffmpeg_metadata_output}", file=sys.stderr)
-	
-	
-	matched_length = re.search(r"time=([0-9:\\.]+)", ffmpeg_metadata_output)
-	hh_mm_ss = matched_length.group(1)
-	length = hhmmss_to_seconds(hh_mm_ss)
+			print(f"ffmpeg time: {time.time()-ffmpeg_start} result size: {len(ffmpeg_stdout)} stderr = \n{ffmpeg_metadata_output}", file=sys.stderr)
+
+	length = final_audio.duration_seconds
 	
 	with open(f"{path}.len.txt", "w") as f:
 		f.write(str(float(length)))
