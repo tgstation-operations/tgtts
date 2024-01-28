@@ -1,28 +1,52 @@
 server {
-	server_name tts3.serber.tgstation13.org tts3.tgstation13.org;
+	server_name tts.tgstation13.org;
 	
 	root /var/www/html;
 	
 	location /tts/tg {
-		proxy_pass http://localhost:5200/;
-		access_log /var/log/nginx/stream.log upstream_time;
-		access_log /var/log/nginx/access.log;
-		#return 403;
-	}
-	location /tts/tg/haproxy-stats {
-		proxy_pass http://localhost:5299/;
-		access_log /var/log/nginx/access.log;
-		error_log /var/log/nginx/error.log;
-		#return 403;
-	}
-	location /tts/sky {
 		proxy_pass http://localhost:5100/;
 		access_log /var/log/nginx/stream.log upstream_time;
 		access_log /var/log/nginx/access.log;
 		#return 403;
 	}
-	location /tts/sky/haproxy-stats {
+	location /tts/tg/haproxy-stats {
 		proxy_pass http://localhost:5199/;
+		access_log /var/log/nginx/access.log;
+		error_log /var/log/nginx/error.log;
+		#return 403;
+	}
+	location /tts/sky {
+		proxy_pass http://localhost:5200/;
+		access_log /var/log/nginx/stream.log upstream_time;
+		access_log /var/log/nginx/access.log;
+		#return 403;
+	}
+	location /tts/sky/haproxy-stats {
+		proxy_pass http://localhost:5299/;
+		access_log /var/log/nginx/access.log;
+		error_log /var/log/nginx/error.log;
+		#return 403;
+	}
+	location /tts/nova {
+		proxy_pass http://localhost:5300/;
+		access_log /var/log/nginx/stream.log upstream_time;
+		access_log /var/log/nginx/access.log;
+		#return 403;
+	}
+	location /tts/nova/haproxy-stats {
+		proxy_pass http://localhost:5399/;
+		access_log /var/log/nginx/access.log;
+		error_log /var/log/nginx/error.log;
+		#return 403;
+	}
+	location /tts/goof {
+		proxy_pass http://localhost:5400/;
+		access_log /var/log/nginx/stream.log upstream_time;
+		access_log /var/log/nginx/access.log;
+		#return 403;
+	}
+	location /tts/goof/haproxy-stats {
+		proxy_pass http://localhost:5499/;
 		access_log /var/log/nginx/access.log;
 		error_log /var/log/nginx/error.log;
 		#return 403;
@@ -68,8 +92,9 @@ server {
 	}
 	
     listen 443 ssl; # managed by Certbot
-    ssl_certificate /etc/letsencrypt/live/tts3.serber.tgstation13.org/fullchain.pem; # managed by Certbot
-    ssl_certificate_key /etc/letsencrypt/live/tts3.serber.tgstation13.org/privkey.pem; # managed by Certbot
+	#listen 8080;
+    ssl_certificate /etc/letsencrypt/live/tts.tgstation13.org/fullchain.pem; # managed by Certbot
+    ssl_certificate_key /etc/letsencrypt/live/tts.tgstation13.org/privkey.pem; # managed by Certbot
     include /etc/letsencrypt/options-ssl-nginx.conf; # managed by Certbot
     ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem; # managed by Certbot
 	location / {
@@ -80,7 +105,7 @@ server {
 }
 
 server {
-    if ($host = tts3.serber.tgstation13.org) {
+    if ($host = tts.tgstation13.org) {
         return 302 https://$host$request_uri;
     } # managed by Certbot
 	
@@ -119,12 +144,9 @@ server {
 		gunzip on;
 	}
 	location / {
-		if ($host = tts3.tgstation13.org) {
-			return 302 https://$host$request_uri;
-		}
 		return 404; # managed by Certbot
 	}
-	server_name tts3.serber.tgstation13.org tts3.tgstation13.org;
+	server_name tts.tgstation13.org;
 	listen 80;
     
 	access_log off;

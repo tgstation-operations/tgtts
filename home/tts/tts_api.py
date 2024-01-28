@@ -27,8 +27,11 @@ segmenter = pysbd.Segmenter(language="en", clean=True)
 
 app = Flask(__name__)
 
-authorization_token = ""
-cache_url_base = os.getenv("TTS_URL_BASE", "https://tts3.tgstation13.org/cache/")
+authorization_token = os.getenv("TTS_AUTHORIZATION_TOKEN", "vote_goof_2024")
+cache_url_base = os.getenv("TTS_URL_BASE", "https://tts.tgstation13.org/cache/")
+tts_port = os.getenv("TTS_GPU_PORT", "5010")
+blips_port = os.getenv("TTS_BLIPS_PORT", "5020")
+max_active_subrequests = int(os.getenv("TTS_MAX_SUBREQUESTS", 2))
 
 
 voices_json = None
@@ -123,7 +126,7 @@ def ffmpeg_open(args):
 		process.kill()
 		process.poll()
 
-def text_to_speech_handler(endpoint, voice, text, filter_complex, pitch, authed, force_regenerate, stats, silicon = False, port=5003):
+def text_to_speech_handler(endpoint, voice, text, filter_complex, pitch, authed, force_regenerate, stats, silicon = False, port=5010):
 	global req_count, cache_hits, cache_misses, last_request_time, avg_request_len, avg_request_rate, avg_request_delay
 	stats['failures'] += 1
 	start_time = time.time()
@@ -222,7 +225,7 @@ def text_to_speech_handler(endpoint, voice, text, filter_complex, pitch, authed,
 	ffmpeg_metadata_output = ""
 	#open this now so ffmpeg can startup while we send our subrequests.
 	with ffmpeg_open(ffmpeg_args) as ffmpeg_proc:
-		with FuturesSession(max_workers=5) as session:
+		with FuturesSession(max_workers=max_active_subrequests) as session:
 			response_futures = []
 			for sentence in segmenter.segment(clean_text):
 				if len(''.join(ch for ch in sentence if ch not in string.punctuation)) < 1:
@@ -312,7 +315,7 @@ def text_to_speech_normal():
 	
 	force_regenerate = ("force_regenerate" in request.args)
 	
-	return text_to_speech_handler("generate-tts", voice, text, filter_complex, pitch, authed, force_regenerate, tts_stats, bool(silicon), 5003)
+	return text_to_speech_handler("generate-tts", voice, text, filter_complex, pitch, authed, force_regenerate, tts_stats, bool(silicon), tts_port)
 
 @app.route("/tts-blips")
 def text_to_speech_blips():
@@ -334,7 +337,7 @@ def text_to_speech_blips():
 	
 	force_regenerate = ("force_regenerate" in request.args)
 	
-	return text_to_speech_handler("generate-tts-blips", voice, text, filter_complex, pitch, authed, force_regenerate, blips_stats, bool(silicon), 5220)
+	return text_to_speech_handler("generate-tts-blips", voice, text, filter_complex, pitch, authed, force_regenerate, blips_stats, bool(silicon), blips_port)
 
 @app.route("/tts-voices")
 def voices_list():
@@ -344,7 +347,7 @@ def voices_list():
 	gc.collect()
 	if voices_json:
 		return voices_json
-	response = requests.get(f"http://localhost:5003/tts-voices")
+	response = requests.get(f"http://localhost:{tts_port}/tts-voices")
 	if response.status_code != 200:
 		abort(response.status_code)
 	voices_json = response.content
@@ -352,7 +355,7 @@ def voices_list():
 
 @app.route("/pitch-available")
 def pitch_available():
-	response = requests.get(f"http://localhost:5003/pitch-available")
+	response = requests.get(f"http://localhost:{tts_port}/pitch-available")
 	if response.status_code != 200:
 		abort(500)
 	return "Pitch available", 200
@@ -364,7 +367,7 @@ def tts_health_check():
 	if req_count > 65536:
 		watchdog.notify_error()
 		return f"EXPIRED:", 500
-	response = requests.get(f"http://localhost:5003/health-check")
+	response = requests.get(f"http://localhost:{tts_port}/health-check")
 	return f"OK: {req_count}, {cache_hits}, {cache_misses}, {round(cache_hits / req_count * 100, 1)}%\n", 200
 
 threading.Timer(1, readyup).start()
@@ -373,4 +376,4 @@ if __name__ == "__main__":
 	if os.getenv('TTS_LD_LIBRARY_PATH', "") != "":
 		os.putenv('LD_LIBRARY_PATH', os.getenv('TTS_LD_LIBRARY_PATH'))
 	from waitress import serve
-	serve(app, host="localhost", port=5002, threads=16, backlog=8, connection_limit=256, cleanup_interval=1, channel_timeout=15)
+	serve(app, host="localhost", port=5101, threads=16, backlog=8, connection_limit=256, cleanup_interval=1, channel_timeout=15)

@@ -791,7 +791,7 @@ def text_to_speech_blips():
 				print(f"\nblips generate pitch samples: {voice=}, {pitch_adjustment=}, {text=}")
 				os.makedirs(sample_dir + voice + "/pitch_" + str(pitch_adjustment), exist_ok=True)
 				for i, value in enumerate(letters_to_use):
-					audio, _ = librosa.load(sample_dir + voice + "/" + value + ".wav", 16000)
+					audio, _ = librosa.load(sample_dir + voice + "/" + value + ".wav", sr=16000)
 
 					processed_audio = model_to_use.exec(speaker_id, np.expand_dims(audio, axis=0), int(pitch_adjustment))
 					final_audio = processed_audio.detach().cpu().numpy()
