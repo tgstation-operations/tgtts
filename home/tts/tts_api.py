@@ -17,12 +17,13 @@ import threading
 import sd_notify
 import random
 import string
+import json
 import pysbd
 import pydub
 from pydub import AudioSegment
 from pydub.silence import split_on_silence, detect_leading_silence
 from flask import Flask, request, send_file, abort
-segmenter = pysbd.Segmenter(language="en", clean=True)
+
 
 
 app = Flask(__name__)
@@ -35,6 +36,10 @@ max_active_subrequests = int(os.getenv("TTS_MAX_SUBREQUESTS", 2))
 
 
 voices_json = None
+
+radio_starts = ["./on1.wav", "./on2.wav"]
+radio_ends = ["./off1.wav", "./off2.wav", "./off3.wav", "./off4.wav"]
+segmenter = pysbd.Segmenter(language="en", clean=True)
 
 req_count = 1
 cache_hits = 0
@@ -86,7 +91,7 @@ def both_stats(key, suffex = '', ndigits = 0):
 def ping_watchdog():
 	global last_request_time
 	if watchdog:
-		watchdog.status(f"OK: count:{req_count}(a:{both_stats('failures')}, t:{both_stats('downstreamfailures')}) len:{two_way_round(avg_request_len, 1)} time:[r:{both_stats('avg_tts_request_time', 's', 4)}, f:{both_stats('avg_ffmpeg_time', 's', 3)}, t:{both_stats('avg_request_time', 's', 3)}] rate:{two_way_round(avg_request_rate, 1)}/s hit:{two_way_round(cache_hits / req_count * 100, 1)}% last:{two_way_round(time.time() - last_request_time, 1)}s")
+		watchdog.status(f"req:{req_count}(a:{both_stats('failures')}, t:{both_stats('downstreamfailures')}) len:{two_way_round(avg_request_len, 1)} T:[r:{both_stats('avg_tts_request_time', 's', 4)}, f:{both_stats('avg_ffmpeg_time', 's', 3)}, t:{both_stats('avg_request_time', 's', 3)}] r:{two_way_round(avg_request_rate, 1)}/s hit:{two_way_round(cache_hits / req_count * 100, 1)}% last:{two_way_round(time.time() - last_request_time, 1)}s")
 
 		if (req_count > 10) and (time.time() > last_request_time+30):
 			res = tts_health_check()
@@ -126,47 +131,38 @@ def ffmpeg_open(args):
 		process.kill()
 		process.poll()
 
-def text_to_speech_handler(endpoint, voice, text, filter_complex, pitch, authed, force_regenerate, stats, silicon = False, port=5010):
+def text_to_speech_handler(endpoint, voice, text, filter_complex, pitch, authed, force_regenerate, stats, special_filters, port=5010):
 	global req_count, cache_hits, cache_misses, last_request_time, avg_request_len, avg_request_rate, avg_request_delay
 	stats['failures'] += 1
 	start_time = time.time()
 	
 	rand_cap = 9
-	
-	if silicon:
-		if rand_cap < 9:
-			rand_cap = 1
-		else:
-			rand_cap = 2
-	
+		
 	if filter_complex != "":
 		tts_sample_rate = 40000
 		filter_complex = filter_complex.replace("%SAMPLE_RATE%", str(tts_sample_rate))
-		if rand_cap < 9:
-			rand_cap = 1
-		else:
-			rand_cap = 2
-		
-	elif pitch != "0":
-		if rand_cap < 9:
-			rand_cap = 1
-		else:
-			rand_cap = 2
+		rand_cap -= 2
+	
+	if special_filters:
+		rand_cap -= 2
+	
+	if pitch != "0":
+		rand_cap -= 2
 	
 	clean_text = re.sub(r'(\W)(?=\1)', '', text)
-	hash = hashlib.sha224(f"#v6#{endpoint}#{voice.lower()}#{clean_text}#{filter_complex}#{pitch}#{silicon}#{random.randint(0, rand_cap)}#{len(clean_text)}#".encode()).hexdigest().lower()
+	hash = hashlib.sha224(f"#v7#{endpoint}#{voice.lower()}#{clean_text}#{filter_complex}#{pitch}#{json.dumps(special_filters)}#{random.randint(0, rand_cap)}#{len(clean_text)}#".encode()).hexdigest().lower()
 	
 	identifier = f"tts-{hash}"
 
 	path_prefix = ".local/tts_gen_cache/"
-	subpath = f"v6/{hash[0:2]}/{hash[2:4]}/{hash[4:6]}/"
+	subpath = f"v7/{hash[0:2]}/{hash[2:4]}/{hash[4:6]}/"
 	
 	path = f"{path_prefix}{subpath}{hash[6:]}"
 	
 	print(f"checking cache\n")
 	gzip_result = None
 	if (not force_regenerate) and (random.randint(0, 9) != 0 or (not authed)):
-		if os.path.isfile(f"{path}.ogg"):
+		if os.path.isfile(f"{path}.ogg") and os.path.isfile(f"{path}.len.txt"):
 			with open('firstcachehits.txt', 'a') as f:
 				f.write(f"firstcachehit: {clean_text}\n")
 			print(f"checking cache: found\n")
@@ -210,12 +206,37 @@ def text_to_speech_handler(endpoint, voice, text, filter_complex, pitch, authed,
 	
 	#ffmpeg base arguments. quiet, yes to overwrite, format wav input stdin
 	ffmpeg_args = ["-nostats", "-hide_banner", "-loglevel", "warning", "-y", "-f", "wav", "-i", "pipe:0"]
+	ffmpeg_inputs = 1
+	
+	if "silicon" in special_filters:
+		ffmpeg_args = [*ffmpeg_args, "-i", "./SynthImpulse.wav", "-i", "./RoomImpulse.wav",]
+		SynthImpulse_input = ffmpeg_inputs
+		RoomImpulse_input = ffmpeg_inputs+1
+
+		ffmpeg_inputs += 2
+		if filter_complex != "":
+			filter_complex += ","
+		filter_complex += f"aresample=44100 [silicon_re_1]; [silicon_re_1] apad=pad_dur=2 [silicon_in_1]; [silicon_in_1] asplit=2 [silicon_in_1_1] [silicon_in_1_2]; [silicon_in_1_1] [{SynthImpulse_input}] afir=dry=10:wet=10 [silicon_reverb_1]; [silicon_in_1_2] [silicon_reverb_1] amix=inputs=2:weights=8 1 [silicon_mix_1]; [silicon_mix_1] asplit=2 [silicon_mix_1_1] [silicon_mix_1_2]; [silicon_mix_1_1] [{RoomImpulse_input}] afir=dry=1:wet=1 [silicon_reverb_2]; [silicon_mix_1_2] [silicon_reverb_2] amix=inputs=2:weights=10 1 [silicon_mix_2]; [silicon_mix_2] equalizer=f=7710:t=q:w=0.6:g=-6,equalizer=f=33:t=q:w=0.44:g=-10 [silicon_out]; [silicon_out] alimiter=level_in=1:level_out=1:limit=0.5:attack=5:release=20:level=disabled"
+	
+	if "radio" in special_filters:
+		radio_start_input = ffmpeg_inputs
+		radio_main_input = "0"
+		radio_end_input = ffmpeg_inputs + 1
+		ffmpeg_args = [*ffmpeg_args, "-i", random.choice(radio_starts), "-i", random.choice(radio_ends)]
+		ffmpeg_inputs += 2
+		
+		if filter_complex != "":
+			filter_complex += " [out_to_radio_filter];"
+			radio_main_input = "out_to_radio_filter"
+		
+		filter_complex += f"[{radio_start_input}:a][{radio_main_input}][{radio_end_input}:a] concat=n=3:v=0:a=1"
+		
 	
 	if filter_complex != "":
 		filter_complex += ",asplit=2[ogg][mp3]"
 		ffmpeg_args = [*ffmpeg_args, "-filter_complex", filter_complex, "-map", "[ogg]", "-c:a", "libvorbis", "-q:a", "7", "-f", "ogg", f"{path}.ogg", "-map", "[mp3]", "-c:a", "libmp3lame", "-q:a", "1", "-f", "mp3", f"{path}.mp3"]
-	elif silicon:
-		ffmpeg_args = [*ffmpeg_args, "-i", "./SynthImpulse.wav", "-i", "./RoomImpulse.wav", "-filter_complex", "[0] aresample=44100 [re_1]; [re_1] apad=pad_dur=2 [in_1]; [in_1] asplit=2 [in_1_1] [in_1_2]; [in_1_1] [1] afir=dry=10:wet=10 [reverb_1]; [in_1_2] [reverb_1] amix=inputs=2:weights=8 1 [mix_1]; [mix_1] asplit=2 [mix_1_1] [mix_1_2]; [mix_1_1] [2] afir=dry=1:wet=1 [reverb_2]; [mix_1_2] [reverb_2] amix=inputs=2:weights=10 1 [mix_2]; [mix_2] equalizer=f=7710:t=q:w=0.6:g=-6,equalizer=f=33:t=q:w=0.44:g=-10 [out]; [out] alimiter=level_in=1:level_out=1:limit=0.5:attack=5:release=20:level=disabled,asplit=2[ogg][mp3]", "-map", "[ogg]", "-c:a", "libvorbis", "-q:a", "7", "-f", "ogg", f"{path}.ogg", "-map", "[mp3]", "-c:a", "libmp3lame", "-q:a", "1", "-f", "mp3", f"{path}.mp3"]
+	
+	
 	else:
 		ffmpeg_args = [*ffmpeg_args, "-c:a", "libvorbis", "-q:a", "7", "-f", "ogg", f"{path}.ogg", "-c:a", "libmp3lame", "-q:a", "1", "-f", "mp3", f"{path}.mp3"]
 	
@@ -225,7 +246,7 @@ def text_to_speech_handler(endpoint, voice, text, filter_complex, pitch, authed,
 	ffmpeg_metadata_output = ""
 	#open this now so ffmpeg can startup while we send our subrequests.
 	with ffmpeg_open(ffmpeg_args) as ffmpeg_proc:
-		with FuturesSession(max_workers=max_active_subrequests) as session:
+		with FuturesSession(max_workers = max_active_subrequests) as session:
 			response_futures = []
 			for sentence in segmenter.segment(clean_text):
 				if len(''.join(ch for ch in sentence if ch not in string.punctuation)) < 1:
@@ -285,13 +306,16 @@ def text_to_speech_handler(endpoint, voice, text, filter_complex, pitch, authed,
 	
 	with open(f"{path}.len.txt", "w") as f:
 		f.write(str(float(length)))
+	
 	response = send_file(f"{path}.ogg", as_attachment=True, download_name=f"{identifier}.ogg", mimetype="audio/ogg")
 	response.headers['audio-length'] = length
 	response.headers['Audio-Length-Location'] = f"{cache_url_base}{subpath}{hash[6:]}.len.txt"
 	response.headers['Content-Location'] = f"{cache_url_base}{subpath}{hash[6:]}.ogg"
 	response.headers['Mp3-Content-Location'] = f"{cache_url_base}{subpath}{hash[6:]}.mp3"
+	
 	stats['failures'] -= 1
 	stats['avg_request_time'] = mc_avg(stats['avg_request_time'], time.time()-start_time)
+	
 	return response
 	return "Unknown error", 500
 
@@ -303,19 +327,25 @@ def text_to_speech_normal():
 	
 	text = request.args.get("text", '')
 	pitch = request.args.get("pitch", '0')
+	special_filters = request.args.get("special_filters", '')
+	special_filters = special_filters.split("|")
 	silicon = request.args.get("silicon", False)
 	if pitch == "":
 		pitch = "0"
+	
 	if text == '':
 		text = request.json.get("text", '')
-		
+
+	if silicon:
+		special_filters = ["silicon"]
+	
 	identifier = request.args.get("identifier", '')
 	
 	filter_complex = request.args.get("filter", '')
 	
 	force_regenerate = ("force_regenerate" in request.args)
 	
-	return text_to_speech_handler("generate-tts", voice, text, filter_complex, pitch, authed, force_regenerate, tts_stats, bool(silicon), tts_port)
+	return text_to_speech_handler("generate-tts", voice, text, filter_complex, pitch, authed, force_regenerate, tts_stats, special_filters, tts_port)
 
 @app.route("/tts-blips")
 def text_to_speech_blips():
@@ -325,11 +355,17 @@ def text_to_speech_blips():
 	
 	text = request.args.get("text", '')
 	pitch = request.args.get("pitch", '0')
+	special_filters = request.args.get("special_filters", '')
+	special_filters = special_filters.split("|")
 	silicon = request.args.get("silicon", False)
 	if pitch == "":
 		pitch = "0"
+	
 	if text == '':
 		text = request.json.get("text", '')
+
+	if silicon:
+		special_filters = ["silicon"]
 		
 	identifier = request.args.get("identifier", '')
 	
@@ -337,7 +373,7 @@ def text_to_speech_blips():
 	
 	force_regenerate = ("force_regenerate" in request.args)
 	
-	return text_to_speech_handler("generate-tts-blips", voice, text, filter_complex, pitch, authed, force_regenerate, blips_stats, bool(silicon), blips_port)
+	return text_to_speech_handler("generate-tts-blips", voice, text, filter_complex, pitch, authed, force_regenerate, blips_stats, special_filters, blips_port)
 
 @app.route("/tts-voices")
 def voices_list():
