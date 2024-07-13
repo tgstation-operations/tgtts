@@ -35,7 +35,7 @@ Unzip the [model files](https://tts.tgstation13.download/cache/models.zip) into 
 
 Under the user account that will be running python, install the dependancies:  
 `python3.10 -m pip install tts`  
-`python3.10 -m pip install tgtts/requirements.txt`  
+`python3.10 -m pip install -r tgtts/requirements.txt`  
 
 (these are done as two seperate steps because of a version conflict on librosa, it will complain about this, you can ignore this.)
 
