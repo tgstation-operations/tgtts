@@ -1,0 +1,1 @@
+watch -tcn0.5 -x bash -c "SYSTEMD_COLORS=1 systemctl status tgtts-api-tg{1..2} tgtts-vits-gpu{1..5} tgtts-rvc-gpu{1..7} tgtts-hubert-gpu{1..2} tgtts-api-blips --no-pager --lines=0|grep --color=never -E '^([^:]*(Active|Status):)|^([^.]*.service -)|^$'"

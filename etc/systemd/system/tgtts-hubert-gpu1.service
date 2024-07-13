@@ -1,0 +1,22 @@
+[Unit]
+Description=tgtts-hubert-gpu1
+After=network.target
+
+[Service]
+User=tts
+WorkingDirectory=/home/tts/tgtts
+Type=notify
+NotifyAccess=main
+WatchdogSec=30s
+TimeoutStartSec=120s
+Nice=-10
+EnvironmentFile=/home/tts/tgtts/env/ttscommon.env
+EnvironmentFile=/home/tts/tgtts/env/gpucommon.env
+EnvironmentFile=/home/tts/tgtts/env/hubertcommon.env
+EnvironmentFile=/home/tts/tgtts/env/tgtts-hubert-gpu.env
+#ExecStart=python3 -m flask --app tts_onnx run -h 127.0.0.1 -p 5018 --no-reload --no-debugger --without-threads
+ExecStart=python3.10 -u /home/tts/.local/bin/waitress-serve --host=localhost --port=5061 --threads=16 --connection-limit=256 --cleanup-interval=1 --channel-timeout=15 tts_onnx_hubert:app
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
