@@ -91,7 +91,7 @@ tg_tts_run_options.add_run_config_entry("memory.enable_memory_arena_shrinkage", 
 class CrepePitchExtractor():
 	def __init__(self):
 		self.session = CrepeInferenceSession(
-			model='shaped',
+			model='full',
 			sess_options = tg_tts_sess_options,
 			providers=tg_tts_providers)
 
