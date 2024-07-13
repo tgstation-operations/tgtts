@@ -30,6 +30,7 @@ ssl request -> nginx (terminate ssl) -> haproxy api port -> tts-api python daemo
 
 Setup `tgtts` folder somewhere  
 Clone https://github.com/yqzhishen/onnxcrepe into `tgtts/onnxcrepe` (so that the repo's readme is located at `tgtts/onnexrepe/readme.md` (production running with commit `ca7e5d7f2dfca5cc4d99e8d546b00793ca4e7157`)  
+Download the full onnxcrepe model weights from the releases tab on their repo into `tgtts/onnxcrepe/assets/` (so that `full.onnx` is located at `tgtts/onnxcrepe/assets/full.onnx`)
 Unzip the [model files](https://tts.tgstation13.download/cache/models.zip) into `tgtts/models` (so that the structure looks like `tgtts/models/hubert/...`, `tgtts/models/rvc/...`, `tgtts/models/vits/...`)  
 
 Under the user account that will be running python, install the dependancies:  
