@@ -1,5 +1,5 @@
 # TG TTS
-
+[![Response Time Badge](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Ftgstation-operations%2Fstatus%2Fmaster%2Fapi%2Ftts-generation%2Fresponse-time-week.json)](https://status.tgstation13.org/history/tts-generation) [![Uptime Badge](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Ftgstation-operations%2Fstatus%2Fmaster%2Fapi%2Ftts-generation%2Fuptime-week.json)](https://status.tgstation13.org/history/tts-generation)  
 This is the files for the tg tts server. The directory structure matches where the files deploy to. Only works on python 3.10 (3.9 doesn't have a thing we use and 3.11 added a new syntax rule that invalided a bunch of unmaintained external code.
 
 /home/tts/tgtts has the code files.
